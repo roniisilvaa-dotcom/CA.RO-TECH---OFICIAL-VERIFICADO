@@ -8,11 +8,7 @@ function getGenAI(): GoogleGenAI {
     const apiKey = process.env.GEMINI_API_KEY || 'MOCK_KEY';
     genAIInstance = new GoogleGenAI({
       apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
+      httpOptions: { headers: { 'User-Agent': 'caro-tech-painel' } },
     });
   }
   return genAIInstance;
@@ -40,14 +36,11 @@ Regras Cruciais do WhatsApp:
 4. Mantenha sempre a postura profissional no tom de voz especificado.`;
 
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey.trim() === '') {
-    // Fallback simulation when no live API key is set
     return `[Simulador IA - ${config.nomeAssistente}]: Olá! Agradeço seu contato. Com base na nossa base de conhecimento, estou à disposição para ajudar. Você perguntou: "${mensagemUsuario}". Como posso prosseguir?`;
   }
 
   try {
     const ai = getGenAI();
-
-    // Format historical messages if available
     let contents = '';
     if (historicoMensagens && historicoMensagens.length > 0) {
       const formattedHistory = historicoMensagens
@@ -62,16 +55,11 @@ Regras Cruciais do WhatsApp:
     const response = await ai.models.generateContent({
       model: 'gemini-3.6-flash',
       contents,
-      config: {
-        systemInstruction: systemPrompt,
-        temperature: 0.6,
-      },
+      config: { systemInstruction: systemPrompt, temperature: 0.6 },
     });
 
     const replyText = response.text?.trim();
-    if (replyText) {
-      return replyText;
-    }
+    if (replyText) return replyText;
     return `Olá! Sou ${config.nomeAssistente}. Como posso te ajudar hoje?`;
   } catch (error) {
     console.error('Erro ao gerar resposta com Gemini:', error);
