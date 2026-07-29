@@ -2,55 +2,53 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
-import { db } from './server/db.js';
+import { prisma } from './server/prisma.js';
 import { gerarRespostaIA } from './server/gemini.js';
-import { Empresa, UsuarioPainel } from './src/types.js';
+import { seedSeNecessario } from './server/seed.js';
+import {
+  verificarSenha,
+  assinarSessao,
+  definirCookieSessao,
+  limparCookieSessao,
+  carregarSessao,
+  exigirLogin,
+  exigirSuperAdmin,
+} from './server/auth.js';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function sanitizeUsuario(u: any) {
+  const { senhaHash, ...rest } = u;
+  return rest;
+}
+
 async function startServer() {
+  try {
+    await seedSeNecessario();
+  } catch (err) {
+    console.error('[Seed] Falha ao rodar seed automático:', err);
+  }
+
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
-
-  // Simple Session / Auth Context helper middleware
-  app.use((req: any, _res, next) => {
-    // Read headers for auth or fallback to header 'x-user-id'
-    const userId = (req.headers['x-user-id'] as string) || 'usr_superadmin';
-    const activeEmpresaHeader = req.headers['x-empresa-id'] as string;
-
-    let user = db.usuarios.find((u) => u.id === userId);
-    if (!user) {
-      user = db.usuarios[0]; // Fallback to Super Admin for default preview ease
-    }
-
-    req.user = user;
-
-    // Super admin can switch context or impersonate a company
-    if (user.perfil === 'SUPER_ADMIN' && activeEmpresaHeader) {
-      req.empresaId = activeEmpresaHeader;
-    } else {
-      req.empresaId = user.empresaId || 'emp_carotech';
-    }
-
-    next();
-  });
+  app.use(cookieParser());
+  app.use(carregarSessao);
 
   // ==========================================
   // 1. WHATSAPP META WEBHOOK (Graph API v20)
   // ==========================================
 
-  // GET: Verification endpoint for Meta Cloud API Webhook
   app.get('/api/webhook', (req: Request, res: Response) => {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
-
     const verifyToken = process.env.VERIFY_TOKEN || 'carotech_webhook_token_2026';
 
     if (mode === 'subscribe' && token === verifyToken) {
@@ -62,7 +60,6 @@ async function startServer() {
     }
   });
 
-  // POST: Receiving messages from WhatsApp
   app.post('/api/webhook', async (req: Request, res: Response) => {
     try {
       const body = req.body;
@@ -80,20 +77,18 @@ async function startServer() {
         return;
       }
 
-      // 1. Identify company by phone_number_id
-      const numero = db.getNumeroByPhoneNumberId(phoneNumberId);
+      const numero = await prisma.numeroWhatsapp.findUnique({ where: { phoneNumberId } });
       if (!numero) {
         console.log(`[Webhook Meta] Número ${phoneNumberId} não cadastrado.`);
         res.status(200).send('OK');
         return;
       }
 
-      const empresaId = numero.empresaId;
       const telefoneContato = message.from;
       const nomeContatoMeta = change?.contacts?.[0]?.profile?.name || `Contato (${telefoneContato})`;
       const textoRecebido = message.text?.body || '[Mensagem com mídia ou botão]';
 
-      await processarMensagemEntrante(empresaId, telefoneContato, nomeContatoMeta, textoRecebido);
+      await processarMensagemEntrante(numero.empresaId, telefoneContato, nomeContatoMeta, textoRecebido, numero);
 
       res.status(200).send('OK');
     } catch (err) {
@@ -102,150 +97,153 @@ async function startServer() {
     }
   });
 
-  // Helper logic for processing incoming WhatsApp message (Used by Webhook & Simulator)
+  async function enviarMensagemMeta(numero: { phoneNumberId: string; tokenAcesso: string }, to: string, texto: string) {
+    if (!numero.tokenAcesso || numero.tokenAcesso === 'SUBSTITUIR_PELO_TOKEN_PERMANENTE') {
+      console.log('[Meta API] Token ainda não configurado - envio real pulado (modo simulação).');
+      return;
+    }
+    try {
+      const url = `https://graph.facebook.com/v20.0/${numero.phoneNumberId}/messages`;
+      await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${numero.tokenAcesso}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to,
+          type: 'text',
+          text: { body: texto },
+        }),
+      });
+    } catch (err) {
+      console.error('[Meta API] Erro ao enviar mensagem real:', err);
+    }
+  }
+
   async function processarMensagemEntrante(
     empresaId: string,
     telefoneContato: string,
     nomeContato: string,
-    textoRecebido: string
+    textoRecebido: string,
+    numero?: { phoneNumberId: string; tokenAcesso: string } | null
   ) {
-    // 1. Find or create contact
-    let contato = db.contatos.find((c) => c.empresaId === empresaId && c.telefone === telefoneContato);
+    let contato = await prisma.contato.findUnique({
+      where: { empresaId_telefone: { empresaId, telefone: telefoneContato } },
+    });
     if (!contato) {
-      contato = {
-        id: `ct_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        empresaId,
-        telefone: telefoneContato,
-        nome: nomeContato,
-        criadoEm: new Date().toISOString(),
-      };
-      db.contatos.push(contato);
+      contato = await prisma.contato.create({
+        data: { empresaId, telefone: telefoneContato, nome: nomeContato },
+      });
     } else if (!contato.nome || contato.nome.startsWith('Contato (')) {
-      contato.nome = nomeContato;
+      contato = await prisma.contato.update({ where: { id: contato.id }, data: { nome: nomeContato } });
     }
 
-    // 2. Find or create open conversation
-    let conversa = db.conversas.find((c) => c.empresaId === empresaId && c.contatoId === contato.id && c.status === 'aberta');
+    let conversa = await prisma.conversa.findFirst({
+      where: { empresaId, contatoId: contato.id, status: 'aberta' },
+    });
     if (!conversa) {
-      conversa = {
-        id: `cv_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        empresaId,
-        contatoId: contato.id,
-        status: 'aberta',
-        atendidoPor: 'ia',
-        iniciadaEm: new Date().toISOString(),
-        ultimaMensagem: textoRecebido,
-        ultimaMensagemData: new Date().toISOString(),
-      };
-      db.conversas.push(conversa);
+      conversa = await prisma.conversa.create({
+        data: {
+          empresaId,
+          contatoId: contato.id,
+          atendidoPor: 'ia',
+          ultimaMensagem: textoRecebido,
+          ultimaMensagemData: new Date(),
+        },
+      });
     } else {
-      conversa.ultimaMensagem = textoRecebido;
-      conversa.ultimaMensagemData = new Date().toISOString();
+      conversa = await prisma.conversa.update({
+        where: { id: conversa.id },
+        data: { ultimaMensagem: textoRecebido, ultimaMensagemData: new Date() },
+      });
     }
 
-    // 3. Record incoming message
-    const msgIn = {
-      id: `msg_${Date.now()}_in`,
-      conversaId: conversa.id,
-      direcao: 'in' as const,
-      conteudo: textoRecebido,
-      enviadoPor: 'contato' as const,
-      criadaEm: new Date().toISOString(),
-    };
-    db.mensagens.push(msgIn);
+    await prisma.mensagem.create({
+      data: { conversaId: conversa.id, direcao: 'in', conteudo: textoRecebido, enviadoPor: 'contato' },
+    });
 
-    // 4. Check escalation rules for human transfer
-    const configIA = db.getConfiguracaoIAByEmpresaId(empresaId);
+    const configIA = await prisma.configuracaoIA.findUnique({ where: { empresaId } });
     const regrasEscalonamento = configIA?.regrasEscalonamento || '';
 
-    // Escalation keywords check
     const gatilhosHumano = ['humano', 'atendente', 'falar com pessoa', 'vendedor', 'suporte humano', 'reclamação', 'cancelar'];
-    const gatilhoPersonalizadoEncontrado =
+    const gatilhoPersonalizado =
       regrasEscalonamento &&
       regrasEscalonamento
         .toLowerCase()
         .split(/[,;\n]/)
         .some((regra) => regra.trim() && textoRecebido.toLowerCase().includes(regra.trim()));
 
-    const precisaHumano =
-      gatilhosHumano.some((g) => textoRecebido.toLowerCase().includes(g)) || gatilhoPersonalizadoEncontrado;
+    const precisaHumano = gatilhosHumano.some((g) => textoRecebido.toLowerCase().includes(g)) || gatilhoPersonalizado;
 
     if (precisaHumano) {
-      conversa.atendidoPor = 'humano';
-      const msgTransfer = {
-        id: `msg_${Date.now()}_sys`,
-        conversaId: conversa.id,
-        direcao: 'out' as const,
-        conteudo: `[Escalonamento Automático]: Atendimento transferido para a equipe humana conforme solicitação do cliente.`,
-        enviadoPor: 'ia' as const,
-        criadaEm: new Date().toISOString(),
-      };
-      db.mensagens.push(msgTransfer);
+      conversa = await prisma.conversa.update({ where: { id: conversa.id }, data: { atendidoPor: 'humano' } });
 
-      // Create or update Lead automatically in Kanban
-      let leadExistente = db.leads.find((l) => l.empresaId === empresaId && l.contatoId === contato.id);
+      await prisma.mensagem.create({
+        data: {
+          conversaId: conversa.id,
+          direcao: 'out',
+          conteudo: '[Escalonamento Automático]: Atendimento transferido para a equipe humana conforme solicitação do cliente.',
+          enviadoPor: 'ia',
+        },
+      });
+
+      const leadExistente = await prisma.lead.findFirst({ where: { empresaId, contatoId: contato.id } });
       if (!leadExistente) {
-        db.leads.push({
-          id: `ld_${Date.now()}`,
-          empresaId,
-          contatoId: contato.id,
-          etapaFunil: 'novo',
-          valorEstimado: 1500,
-          observacoes: `Solicitou atendimento humano no WhatsApp: "${textoRecebido}"`,
-          criadoEm: new Date().toISOString(),
-          atualizadoEm: new Date().toISOString(),
+        await prisma.lead.create({
+          data: {
+            empresaId,
+            contatoId: contato.id,
+            etapaFunil: 'novo',
+            valorEstimado: 1500,
+            observacoes: `Solicitou atendimento humano no WhatsApp: "${textoRecebido}"`,
+          },
         });
       }
     } else if (conversa.atendidoPor === 'ia') {
-      // 5. Generate AI Response via Gemini
-      const historico = db.getMensagensByConversaId(conversa.id);
-      const respostaIA = await gerarRespostaIA(configIA, textoRecebido, historico);
+      const historico = await prisma.mensagem.findMany({
+        where: { conversaId: conversa.id },
+        orderBy: { criadaEm: 'asc' },
+      });
+      const respostaIA = await gerarRespostaIA(configIA as any, textoRecebido, historico as any);
 
-      const msgOut = {
-        id: `msg_${Date.now()}_out`,
-        conversaId: conversa.id,
-        direcao: 'out' as const,
-        conteudo: respostaIA,
-        enviadoPor: 'ia' as const,
-        criadaEm: new Date().toISOString(),
-      };
-      db.mensagens.push(msgOut);
+      await prisma.mensagem.create({
+        data: { conversaId: conversa.id, direcao: 'out', conteudo: respostaIA, enviadoPor: 'ia' },
+      });
 
-      conversa.ultimaMensagem = respostaIA;
-      conversa.ultimaMensagemData = new Date().toISOString();
+      conversa = await prisma.conversa.update({
+        where: { id: conversa.id },
+        data: { ultimaMensagem: respostaIA, ultimaMensagemData: new Date() },
+      });
+
+      if (numero) {
+        await enviarMensagemMeta(numero, telefoneContato, respostaIA);
+      }
     }
 
     return { conversa, contato };
   }
 
   // ==========================================
-  // 2. WHATSAPP SIMULATOR ENDPOINT (For Panel)
+  // 2. SIMULADOR (usado dentro do painel, sem WhatsApp real)
   // ==========================================
-  app.post('/api/simulator/send', async (req: any, res: Response) => {
+  app.post('/api/simulator/send', exigirLogin, async (req: any, res: Response) => {
     try {
       const empresaId = req.empresaId;
       const { telefone, nome, mensagem } = req.body;
-
       if (!telefone || !mensagem) {
         res.status(400).json({ error: 'Telefone e mensagem são obrigatórios.' });
         return;
       }
 
-      const result = await processarMensagemEntrante(
-        empresaId,
-        telefone,
-        nome || `Cliente (${telefone})`,
-        mensagem
-      );
-
-      const mensagensAtualizadas = db.getMensagensByConversaId(result.conversa.id);
-
-      res.json({
-        success: true,
-        conversa: result.conversa,
-        contato: result.contato,
-        mensagens: mensagensAtualizadas,
+      const result = await processarMensagemEntrante(empresaId, telefone, nome || `Cliente (${telefone})`, mensagem);
+      const mensagensAtualizadas = await prisma.mensagem.findMany({
+        where: { conversaId: result.conversa.id },
+        orderBy: { criadaEm: 'asc' },
       });
+
+      res.json({ success: true, conversa: result.conversa, contato: result.contato, mensagens: mensagensAtualizadas });
     } catch (err) {
       console.error('Erro no simulador:', err);
       res.status(500).json({ error: 'Erro ao processar simulação de mensagem.' });
@@ -253,278 +251,267 @@ async function startServer() {
   });
 
   // ==========================================
-  // 3. AUTH & USER MANAGEMENT ENDPOINTS
+  // 3. AUTENTICAÇÃO (com senha real)
   // ==========================================
-  app.post('/api/auth/login', (req: Request, res: Response) => {
-    const { email } = req.body;
-    const user = db.usuarios.find((u) => u.email.toLowerCase() === email.toLowerCase());
-
-    if (!user) {
-      res.status(401).json({ error: 'Usuário não encontrado. Tente admin@carotech.com.br ou gestor@techstore.com.br' });
+  app.post('/api/auth/login', async (req: Request, res: Response) => {
+    const { email, senha } = req.body;
+    if (!email || !senha) {
+      res.status(400).json({ error: 'E-mail e senha são obrigatórios.' });
       return;
     }
 
-    const empresa = db.getEmpresaById(user.empresaId || 'emp_carotech');
-    res.json({ usuario: user, empresaAtiva: empresa });
-  });
-
-  app.get('/api/auth/me', (req: any, res: Response) => {
-    const empresa = db.getEmpresaById(req.empresaId);
-    res.json({ usuario: req.user, empresaAtiva: empresa });
-  });
-
-  // ==========================================
-  // 4. SUPER ADMIN ENDPOINTS (/api/admin/*)
-  // ==========================================
-
-  // List all companies
-  app.get('/api/admin/empresas', (req: any, res: Response) => {
-    if (req.user.perfil !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Acesso restrito à equipe CA.RO TECH.' });
-      return;
-    }
-    res.json(db.empresas);
-  });
-
-  // Create new client company
-  app.post('/api/admin/empresas', (req: any, res: Response) => {
-    if (req.user.perfil !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Acesso restrito à equipe CA.RO TECH.' });
+    const usuario = await prisma.usuarioPainel.findUnique({ where: { email: String(email).toLowerCase() } });
+    if (!usuario) {
+      res.status(401).json({ error: 'E-mail ou senha inválidos.' });
       return;
     }
 
+    const senhaOk = await verificarSenha(senha, usuario.senhaHash);
+    if (!senhaOk) {
+      res.status(401).json({ error: 'E-mail ou senha inválidos.' });
+      return;
+    }
+
+    const token = assinarSessao(usuario.id);
+    definirCookieSessao(res, token);
+
+    const empresa = usuario.empresaId ? await prisma.empresa.findUnique({ where: { id: usuario.empresaId } }) : null;
+    res.json({ usuario: sanitizeUsuario(usuario), empresaAtiva: empresa });
+  });
+
+  app.post('/api/auth/logout', (req: Request, res: Response) => {
+    limparCookieSessao(res);
+    res.json({ success: true });
+  });
+
+  app.get('/api/auth/me', exigirLogin, async (req: any, res: Response) => {
+    const empresaId = req.empresaId;
+    const empresa = empresaId ? await prisma.empresa.findUnique({ where: { id: empresaId } }) : null;
+    res.json({ usuario: sanitizeUsuario(req.user), empresaAtiva: empresa });
+  });
+
+  // ==========================================
+  // 4. SUPER ADMIN (/api/admin/*)
+  // ==========================================
+  app.get('/api/admin/empresas', exigirLogin, exigirSuperAdmin, async (_req: any, res: Response) => {
+    const empresas = await prisma.empresa.findMany({ orderBy: { criadoEm: 'asc' } });
+    res.json(empresas);
+  });
+
+  app.post('/api/admin/empresas', exigirLogin, exigirSuperAdmin, async (req: any, res: Response) => {
     const { nome, cnpj, plano, emailAdmin, nomeAdmin } = req.body;
     if (!nome) {
       res.status(400).json({ error: 'Nome da empresa é obrigatório.' });
       return;
     }
 
-    const novaEmpresa: Empresa = {
-      id: `emp_${Date.now()}`,
-      nome,
-      cnpj: cnpj || '',
-      plano: plano || 'padrao',
-      ativo: true,
-      criadoEm: new Date().toISOString(),
-    };
-    db.empresas.push(novaEmpresa);
-
-    // Create default AI config
-    db.configuracoesIA.push({
-      id: `cfg_${Date.now()}`,
-      empresaId: novaEmpresa.id,
-      nomeAssistente: `Assistente ${nome}`,
-      tomDeVoz: 'cordial, rápido e prestativo',
-      baseConhecimento: `Empresa ${nome}. Atendimento via WhatsApp.`,
-      regrasEscalonamento: 'Se disser humano ou atendente, transferir.',
-      llmProvider: 'gemini',
-      atualizadoEm: new Date().toISOString(),
+    const novaEmpresa = await prisma.empresa.create({
+      data: { nome, cnpj: cnpj || '', plano: plano || 'padrao' },
     });
 
-    // Create client admin user if email provided
-    if (emailAdmin) {
-      db.usuarios.push({
-        id: `usr_${Date.now()}`,
+    await prisma.configuracaoIA.create({
+      data: {
         empresaId: novaEmpresa.id,
-        empresaNome: novaEmpresa.nome,
-        nome: nomeAdmin || `Gestor ${nome}`,
-        email: emailAdmin,
-        perfil: 'CLIENTE_ADMIN',
-        criadoEm: new Date().toISOString(),
+        nomeAssistente: `Assistente ${nome}`,
+        tomDeVoz: 'cordial, rápido e prestativo',
+        baseConhecimento: `Empresa ${nome}. Atendimento via WhatsApp.`,
+        regrasEscalonamento: 'Se disser humano ou atendente, transferir.',
+        llmProvider: 'gemini',
+      },
+    });
+
+    if (emailAdmin) {
+      const bcrypt = await import('bcryptjs');
+      const senhaTemporaria = Math.random().toString(36).slice(-10);
+      const senhaHash = await bcrypt.hash(senhaTemporaria, 10);
+      await prisma.usuarioPainel.create({
+        data: {
+          empresaId: novaEmpresa.id,
+          nome: nomeAdmin || `Gestor ${nome}`,
+          email: emailAdmin,
+          senhaHash,
+          perfil: 'CLIENTE_ADMIN',
+        },
       });
+      // eslint-disable-next-line no-console
+      console.log(`[Admin] Usuário ${emailAdmin} criado com senha temporária: ${senhaTemporaria} (envie para o cliente trocar no primeiro acesso)`);
     }
 
     res.status(201).json(novaEmpresa);
   });
 
-  // Toggle company active status
-  app.put('/api/admin/empresas/:id', (req: any, res: Response) => {
-    if (req.user.perfil !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Acesso restrito.' });
-      return;
-    }
-    const empresa = db.getEmpresaById(req.params.id);
-    if (!empresa) {
+  app.put('/api/admin/empresas/:id', exigirLogin, exigirSuperAdmin, async (req: any, res: Response) => {
+    const data: any = {};
+    if (req.body.ativo !== undefined) data.ativo = req.body.ativo;
+    if (req.body.nome) data.nome = req.body.nome;
+    if (req.body.plano) data.plano = req.body.plano;
+
+    try {
+      const empresa = await prisma.empresa.update({ where: { id: req.params.id }, data });
+      res.json(empresa);
+    } catch {
       res.status(404).json({ error: 'Empresa não encontrada.' });
-      return;
     }
-
-    if (req.body.ativo !== undefined) empresa.ativo = req.body.ativo;
-    if (req.body.nome) empresa.nome = req.body.nome;
-    if (req.body.plano) empresa.plano = req.body.plano;
-
-    res.json(empresa);
   });
 
-  // Delete company
-  app.delete('/api/admin/empresas/:id', (req: any, res: Response) => {
-    if (req.user.perfil !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Acesso restrito.' });
-      return;
-    }
-    db.empresas = db.empresas.filter((e) => e.id !== req.params.id);
+  app.delete('/api/admin/empresas/:id', exigirLogin, exigirSuperAdmin, async (req: any, res: Response) => {
+    await prisma.empresa.delete({ where: { id: req.params.id } }).catch(() => null);
     res.json({ success: true });
   });
 
-  // WhatsApp Numbers Management
-  app.get('/api/admin/numeros', (req: any, res: Response) => {
+  app.get('/api/admin/numeros', exigirLogin, async (req: any, res: Response) => {
     if (req.user.perfil === 'SUPER_ADMIN') {
-      res.json(db.numeros);
+      const numeros = await prisma.numeroWhatsapp.findMany();
+      res.json(numeros);
     } else {
-      res.json(db.numeros.filter((n) => n.empresaId === req.empresaId));
+      const numeros = await prisma.numeroWhatsapp.findMany({ where: { empresaId: req.empresaId } });
+      res.json(numeros);
     }
   });
 
-  app.post('/api/admin/numeros', (req: any, res: Response) => {
-    if (req.user.perfil !== 'SUPER_ADMIN') {
-      res.status(403).json({ error: 'Apenas a equipe CA.RO TECH pode conectar números Meta.' });
-      return;
-    }
-
+  app.post('/api/admin/numeros', exigirLogin, exigirSuperAdmin, async (req: any, res: Response) => {
     const { empresaId, phoneNumberId, wabaId, numeroExibicao, tokenAcesso } = req.body;
     if (!empresaId || !phoneNumberId || !tokenAcesso) {
       res.status(400).json({ error: 'Empresa ID, Phone Number ID e Token de Acesso são obrigatórios.' });
       return;
     }
 
-    const novoNumero = {
-      id: `num_${Date.now()}`,
-      empresaId,
-      phoneNumberId,
-      wabaId: wabaId || 'WABA_' + phoneNumberId,
-      numeroExibicao: numeroExibicao || '+55 11 90000-0000',
-      tokenAcesso,
-      status: 'conectado' as const,
-      criadoEm: new Date().toISOString(),
-    };
+    const novoNumero = await prisma.numeroWhatsapp.create({
+      data: {
+        empresaId,
+        phoneNumberId,
+        wabaId: wabaId || 'WABA_' + phoneNumberId,
+        numeroExibicao: numeroExibicao || '+55 11 90000-0000',
+        tokenAcesso,
+        status: 'conectado',
+      },
+    });
 
-    db.numeros.push(novoNumero);
     res.status(201).json(novoNumero);
   });
 
   // ==========================================
-  // 5. CLIENT AREA TENANT ENDPOINTS (/api/...)
+  // 5. ÁREA DO CLIENTE (multi-tenant, escopo por empresaId da sessão)
   // ==========================================
-
-  // Get AI Config for current company
-  app.get('/api/configuracao-ia', (req: any, res: Response) => {
-    const config = db.getConfiguracaoIAByEmpresaId(req.empresaId);
+  app.get('/api/configuracao-ia', exigirLogin, async (req: any, res: Response) => {
+    const config = await prisma.configuracaoIA.findUnique({ where: { empresaId: req.empresaId } });
     res.json(config);
   });
 
-  // Update AI Config
-  app.put('/api/configuracao-ia', (req: any, res: Response) => {
+  app.put('/api/configuracao-ia', exigirLogin, async (req: any, res: Response) => {
     if (req.user.perfil === 'CLIENTE_OPERADOR') {
       res.status(403).json({ error: 'Operadores não têm permissão para reconfigurar a IA.' });
       return;
     }
 
-    const config = db.getConfiguracaoIAByEmpresaId(req.empresaId);
     const { nomeAssistente, tomDeVoz, baseConhecimento, regrasEscalonamento, llmProvider } = req.body;
-
-    if (nomeAssistente) config.nomeAssistente = nomeAssistente;
-    if (tomDeVoz) config.tomDeVoz = tomDeVoz;
-    if (baseConhecimento !== undefined) config.baseConhecimento = baseConhecimento;
-    if (regrasEscalonamento !== undefined) config.regrasEscalonamento = regrasEscalonamento;
-    if (llmProvider) config.llmProvider = llmProvider;
-    config.atualizadoEm = new Date().toISOString();
+    const config = await prisma.configuracaoIA.update({
+      where: { empresaId: req.empresaId },
+      data: {
+        ...(nomeAssistente && { nomeAssistente }),
+        ...(tomDeVoz && { tomDeVoz }),
+        ...(baseConhecimento !== undefined && { baseConhecimento }),
+        ...(regrasEscalonamento !== undefined && { regrasEscalonamento }),
+        ...(llmProvider && { llmProvider }),
+      },
+    });
 
     res.json(config);
   });
 
-  // Test AI prompt live
-  app.post('/api/test-ia', async (req: any, res: Response) => {
+  app.post('/api/test-ia', exigirLogin, async (req: any, res: Response) => {
     const { mensagem } = req.body;
-    const config = db.getConfiguracaoIAByEmpresaId(req.empresaId);
-    const resposta = await gerarRespostaIA(config, mensagem || 'Olá, quais os serviços de vocês?');
+    const config = await prisma.configuracaoIA.findUnique({ where: { empresaId: req.empresaId } });
+    const resposta = await gerarRespostaIA(config as any, mensagem || 'Olá, quais os serviços de vocês?');
     res.json({ resposta });
   });
 
-  // Conversations
-  app.get('/api/conversas', (req: any, res: Response) => {
-    const conversas = db.getConversasByEmpresaId(req.empresaId);
+  app.get('/api/conversas', exigirLogin, async (req: any, res: Response) => {
+    const conversas = await prisma.conversa.findMany({
+      where: { empresaId: req.empresaId },
+      include: { contato: true },
+      orderBy: { iniciadaEm: 'desc' },
+    });
     res.json(conversas);
   });
 
-  app.get('/api/conversas/:id/mensagens', (req: any, res: Response) => {
-    const conversa = db.conversas.find((c) => c.id === req.params.id && c.empresaId === req.empresaId);
+  app.get('/api/conversas/:id/mensagens', exigirLogin, async (req: any, res: Response) => {
+    const conversa = await prisma.conversa.findFirst({ where: { id: req.params.id, empresaId: req.empresaId } });
     if (!conversa) {
       res.status(404).json({ error: 'Conversa não encontrada.' });
       return;
     }
-    const mensagens = db.getMensagensByConversaId(conversa.id);
-    const contato = db.contatos.find((ct) => ct.id === conversa.contatoId);
+    const mensagens = await prisma.mensagem.findMany({ where: { conversaId: conversa.id }, orderBy: { criadaEm: 'asc' } });
+    const contato = await prisma.contato.findUnique({ where: { id: conversa.contatoId } });
     res.json({ conversa, contato, mensagens });
   });
 
-  // Send manual human operator message
-  app.post('/api/conversas/:id/mensagens', (req: any, res: Response) => {
-    const conversa = db.conversas.find((c) => c.id === req.params.id && c.empresaId === req.empresaId);
+  app.post('/api/conversas/:id/mensagens', exigirLogin, async (req: any, res: Response) => {
+    const conversa = await prisma.conversa.findFirst({ where: { id: req.params.id, empresaId: req.empresaId } });
     if (!conversa) {
       res.status(404).json({ error: 'Conversa não encontrada.' });
       return;
     }
-
     const { conteudo } = req.body;
     if (!conteudo) {
       res.status(400).json({ error: 'Conteúdo da mensagem é obrigatório.' });
       return;
     }
 
-    // Set atendidoPor to humano when human messages
-    conversa.atendidoPor = 'humano';
-    conversa.ultimaMensagem = conteudo;
-    conversa.ultimaMensagemData = new Date().toISOString();
+    await prisma.conversa.update({
+      where: { id: conversa.id },
+      data: { atendidoPor: 'humano', ultimaMensagem: conteudo, ultimaMensagemData: new Date() },
+    });
 
-    const novaMensagem = {
-      id: `msg_${Date.now()}_hum`,
-      conversaId: conversa.id,
-      direcao: 'out' as const,
-      conteudo,
-      enviadoPor: 'humano' as const,
-      criadaEm: new Date().toISOString(),
-    };
-    db.mensagens.push(novaMensagem);
+    const novaMensagem = await prisma.mensagem.create({
+      data: { conversaId: conversa.id, direcao: 'out', conteudo, enviadoPor: 'humano' },
+    });
+
+    const numero = await prisma.numeroWhatsapp.findFirst({ where: { empresaId: req.empresaId } });
+    const contato = await prisma.contato.findUnique({ where: { id: conversa.contatoId } });
+    if (numero && contato) {
+      await enviarMensagemMeta(numero, contato.telefone, conteudo);
+    }
 
     res.status(201).json(novaMensagem);
   });
 
-  // Update conversation status or atendidoPor
-  app.put('/api/conversas/:id/status', (req: any, res: Response) => {
-    const conversa = db.conversas.find((c) => c.id === req.params.id && c.empresaId === req.empresaId);
+  app.put('/api/conversas/:id/status', exigirLogin, async (req: any, res: Response) => {
+    const conversa = await prisma.conversa.findFirst({ where: { id: req.params.id, empresaId: req.empresaId } });
     if (!conversa) {
       res.status(404).json({ error: 'Conversa não encontrada.' });
       return;
     }
+    const data: any = {};
+    if (req.body.status) data.status = req.body.status;
+    if (req.body.atendidoPor) data.atendidoPor = req.body.atendidoPor;
 
-    if (req.body.status) conversa.status = req.body.status;
-    if (req.body.atendidoPor) conversa.atendidoPor = req.body.atendidoPor;
-
-    res.json(conversa);
+    const atualizado = await prisma.conversa.update({ where: { id: conversa.id }, data });
+    res.json(atualizado);
   });
 
-  // Leads (Kanban)
-  app.get('/api/leads', (req: any, res: Response) => {
-    const leads = db.getLeadsByEmpresaId(req.empresaId);
+  app.get('/api/leads', exigirLogin, async (req: any, res: Response) => {
+    const leads = await prisma.lead.findMany({
+      where: { empresaId: req.empresaId },
+      include: { contato: true },
+      orderBy: { atualizadoEm: 'desc' },
+    });
     res.json(leads);
   });
 
-  app.post('/api/leads', (req: any, res: Response) => {
+  app.post('/api/leads', exigirLogin, async (req: any, res: Response) => {
     const { contatoId, nomeContato, telefoneContato, etapaFunil, valorEstimado, observacoes } = req.body;
     const empresaId = req.empresaId;
 
     let targetContatoId = contatoId;
     if (!targetContatoId && telefoneContato) {
-      let contato = db.contatos.find((c) => c.empresaId === empresaId && c.telefone === telefoneContato);
+      let contato = await prisma.contato.findUnique({
+        where: { empresaId_telefone: { empresaId, telefone: telefoneContato } },
+      });
       if (!contato) {
-        contato = {
-          id: `ct_${Date.now()}`,
-          empresaId,
-          telefone: telefoneContato,
-          nome: nomeContato || `Contato (${telefoneContato})`,
-          criadoEm: new Date().toISOString(),
-        };
-        db.contatos.push(contato);
+        contato = await prisma.contato.create({
+          data: { empresaId, telefone: telefoneContato, nome: nomeContato || `Contato (${telefoneContato})` },
+        });
       }
       targetContatoId = contato.id;
     }
@@ -534,102 +521,95 @@ async function startServer() {
       return;
     }
 
-    const novoLead = {
-      id: `ld_${Date.now()}`,
-      empresaId,
-      contatoId: targetContatoId,
-      etapaFunil: etapaFunil || 'novo',
-      valorEstimado: valorEstimado ? parseFloat(valorEstimado) : 0,
-      observacoes: observacoes || '',
-      criadoEm: new Date().toISOString(),
-      atualizadoEm: new Date().toISOString(),
-    };
-    db.leads.push(novoLead);
-
-    res.status(201).json({
-      ...novoLead,
-      contato: db.contatos.find((c) => c.id === targetContatoId),
+    const novoLead = await prisma.lead.create({
+      data: {
+        empresaId,
+        contatoId: targetContatoId,
+        etapaFunil: etapaFunil || 'novo',
+        valorEstimado: valorEstimado ? parseFloat(valorEstimado) : 0,
+        observacoes: observacoes || '',
+      },
+      include: { contato: true },
     });
+
+    res.status(201).json(novoLead);
   });
 
-  app.put('/api/leads/:id', (req: any, res: Response) => {
-    const lead = db.leads.find((l) => l.id === req.params.id && l.empresaId === req.empresaId);
+  app.put('/api/leads/:id', exigirLogin, async (req: any, res: Response) => {
+    const lead = await prisma.lead.findFirst({ where: { id: req.params.id, empresaId: req.empresaId } });
     if (!lead) {
       res.status(404).json({ error: 'Lead não encontrado.' });
       return;
     }
 
-    if (req.body.etapaFunil) lead.etapaFunil = req.body.etapaFunil;
-    if (req.body.valorEstimado !== undefined) lead.valorEstimado = parseFloat(req.body.valorEstimado);
-    if (req.body.observacoes !== undefined) lead.observacoes = req.body.observacoes;
-    lead.atualizadoEm = new Date().toISOString();
+    const data: any = {};
+    if (req.body.etapaFunil) data.etapaFunil = req.body.etapaFunil;
+    if (req.body.valorEstimado !== undefined) data.valorEstimado = parseFloat(req.body.valorEstimado);
+    if (req.body.observacoes !== undefined) data.observacoes = req.body.observacoes;
 
-    res.json({
-      ...lead,
-      contato: db.contatos.find((c) => c.id === lead.contatoId),
-    });
+    const atualizado = await prisma.lead.update({ where: { id: lead.id }, data, include: { contato: true } });
+    res.json(atualizado);
   });
 
-  app.delete('/api/leads/:id', (req: any, res: Response) => {
-    db.leads = db.leads.filter((l) => l.id !== req.params.id || l.empresaId !== req.empresaId);
+  app.delete('/api/leads/:id', exigirLogin, async (req: any, res: Response) => {
+    await prisma.lead.deleteMany({ where: { id: req.params.id, empresaId: req.empresaId } });
     res.json({ success: true });
   });
 
-  // Team Operators
-  app.get('/api/equipe', (req: any, res: Response) => {
-    const equipe = db.getUsuariosByEmpresaId(req.empresaId);
-    res.json(equipe);
+  app.get('/api/equipe', exigirLogin, async (req: any, res: Response) => {
+    const equipe = await prisma.usuarioPainel.findMany({ where: { empresaId: req.empresaId } });
+    res.json(equipe.map(sanitizeUsuario));
   });
 
-  app.post('/api/equipe', (req: any, res: Response) => {
+  app.post('/api/equipe', exigirLogin, async (req: any, res: Response) => {
     if (req.user.perfil === 'CLIENTE_OPERADOR') {
       res.status(403).json({ error: 'Apenas administradores podem convidar operadores.' });
       return;
     }
-
     const { nome, email, perfil } = req.body;
     if (!nome || !email) {
       res.status(400).json({ error: 'Nome e e-mail são obrigatórios.' });
       return;
     }
 
-    const novoUsuario: UsuarioPainel = {
-      id: `usr_${Date.now()}`,
-      empresaId: req.empresaId,
-      empresaNome: db.getEmpresaById(req.empresaId)?.nome,
-      nome,
-      email,
-      perfil: perfil || 'CLIENTE_OPERADOR',
-      criadoEm: new Date().toISOString(),
-    };
-    db.usuarios.push(novoUsuario);
+    const bcrypt = await import('bcryptjs');
+    const senhaTemporaria = Math.random().toString(36).slice(-10);
+    const senhaHash = await bcrypt.hash(senhaTemporaria, 10);
 
-    res.status(201).json(novoUsuario);
+    const novoUsuario = await prisma.usuarioPainel.create({
+      data: { empresaId: req.empresaId, nome, email, senhaHash, perfil: perfil || 'CLIENTE_OPERADOR' },
+    });
+    console.log(`[Equipe] Usuário ${email} criado com senha temporária: ${senhaTemporaria}`);
+
+    res.status(201).json(sanitizeUsuario(novoUsuario));
   });
 
-  // Global Dashboard Statistics Endpoint
-  app.get('/api/stats', (req: any, res: Response) => {
-    const isSuperAdmin = req.user.perfil === 'SUPER_ADMIN' && !req.headers['x-empresa-id'];
+  app.get('/api/stats', exigirLogin, async (req: any, res: Response) => {
+    const isSuperAdminGlobal = req.user.perfil === 'SUPER_ADMIN' && !req.headers['x-empresa-id'];
 
-    if (isSuperAdmin) {
-      res.json({
-        totalEmpresasAtivas: db.empresas.filter((e) => e.ativo).length,
-        totalNumerosConectados: db.numeros.filter((n) => n.status === 'conectado').length,
-        totalConversas: db.conversas.length,
-        totalMensagensMes: db.mensagens.length,
-        totalLeadsGerados: db.leads.length,
-      });
+    if (isSuperAdminGlobal) {
+      const [totalEmpresasAtivas, totalNumerosConectados, totalConversas, totalMensagensMes, totalLeadsGerados] = await Promise.all([
+        prisma.empresa.count({ where: { ativo: true } }),
+        prisma.numeroWhatsapp.count({ where: { status: 'conectado' } }),
+        prisma.conversa.count(),
+        prisma.mensagem.count(),
+        prisma.lead.count(),
+      ]);
+      res.json({ totalEmpresasAtivas, totalNumerosConectados, totalConversas, totalMensagensMes, totalLeadsGerados });
     } else {
-      const conversas = db.getConversasByEmpresaId(req.empresaId);
-      const leads = db.getLeadsByEmpresaId(req.empresaId);
-      const conversasHumano = conversas.filter((c) => c.atendidoPor === 'humano').length;
-      const conversasIA = conversas.filter((c) => c.atendidoPor === 'ia').length;
+      const empresaId = req.empresaId;
+      const [conversasIA, conversasHumano, totalLeads, leads] = await Promise.all([
+        prisma.conversa.count({ where: { empresaId, atendidoPor: 'ia' } }),
+        prisma.conversa.count({ where: { empresaId, atendidoPor: 'humano' } }),
+        prisma.lead.count({ where: { empresaId } }),
+        prisma.lead.findMany({ where: { empresaId } }),
+      ]);
 
       res.json({
-        totalConversas: conversas.length,
+        totalConversas: conversasIA + conversasHumano,
         conversasIA,
         conversasHumano,
-        totalLeads: leads.length,
+        totalLeads,
         valorTotalLeads: leads.reduce((sum, l) => sum + (l.valorEstimado || 0), 0),
         leadsPorEtapa: {
           novo: leads.filter((l) => l.etapaFunil === 'novo').length,
@@ -642,13 +622,10 @@ async function startServer() {
   });
 
   // ==========================================
-  // VITE DEVELOPMENT MIDDLEWARE / STATIC ASSETS
+  // VITE DEV MIDDLEWARE / STATIC ASSETS
   // ==========================================
   if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
