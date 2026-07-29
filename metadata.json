@@ -1,0 +1,6 @@
+{
+  "name": "CA.RO - Secretárias Virtuais (Camila & Roni)",
+  "description": "Plataforma Tecnológica e de Luxo Multi-Tenant para Gestão de Secretárias Virtuais no WhatsApp (Camila & Roni)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

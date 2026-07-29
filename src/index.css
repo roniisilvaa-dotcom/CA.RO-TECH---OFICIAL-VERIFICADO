@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg: #050B14;
+    --navy-card: #0E182A;
+    --navy-elevated: #15243F;
+    --gold: #D4AF37;
+    --gold-dark: #A88728;
+    --gold-light: #F3E5AB;
+    --gold-glow: rgba(212, 175, 55, 0.25);
+    --gold-border: rgba(212, 175, 55, 0.3);
+    --text-main: #F8FAFC;
+    --text-muted: #94A3B8;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--text-main);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-image: 
+      radial-gradient(circle at 50% 0%, rgba(212, 175, 55, 0.08) 0%, transparent 60%),
+      linear-gradient(to right, rgba(212, 175, 55, 0.03) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(212, 175, 55, 0.03) 1px, transparent 1px);
+    background-size: 100% 100%, 40px 40px, 40px 40px;
+  }
+
+  h1, h2, h3, .font-serif {
+    font-family: 'Playfair Display', Georgia, serif;
+  }
+
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Technological Luxury Glows & Borders */
+.gold-gradient-text {
+  background: linear-gradient(135deg, #FFF0B3 0%, #D4AF37 50%, #AA8623 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gold-gradient-bg {
+  background: linear-gradient(135deg, #D4AF37 0%, #B89326 100%);
+}
+
+.tech-glass-panel {
+  background: rgba(14, 24, 42, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+.gold-glow {
+  box-shadow: 0 0 20px rgba(212, 175, 55, 0.2);
+}
+
+.gold-glow-border {
+  border-color: rgba(212, 175, 55, 0.4);
+  box-shadow: inset 0 0 10px rgba(212, 175, 55, 0.1), 0 0 15px rgba(212, 175, 55, 0.15);
+}
+
+/* Custom scrollbars for navy & gold look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #080F1D;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 55, 0.3);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #D4AF37;
+}
+
