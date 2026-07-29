@@ -1,0 +1,163 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PerfilUsuario {
+  SUPER_ADMIN
+  CLIENTE_ADMIN
+  CLIENTE_OPERADOR
+}
+
+enum PlanoEmpresa {
+  padrao
+  premium
+  interno
+}
+
+enum StatusNumero {
+  conectado
+  pendente
+  erro
+}
+
+enum StatusConversa {
+  aberta
+  encerrada
+}
+
+enum AtendidoPor {
+  ia
+  humano
+}
+
+enum DirecaoMensagem {
+  in
+  out
+}
+
+enum EnviadoPor {
+  contato
+  ia
+  humano
+}
+
+enum EtapaFunil {
+  novo
+  em_negociacao
+  ganho
+  perdido
+}
+
+enum LlmProvider {
+  gemini
+  anthropic
+  openai
+}
+
+model Empresa {
+  id       String       @id @default(cuid())
+  nome     String
+  cnpj     String?
+  plano    PlanoEmpresa  @default(padrao)
+  ativo    Boolean       @default(true)
+  criadoEm DateTime      @default(now())
+
+  numeros        NumeroWhatsapp[]
+  usuarios       UsuarioPainel[]
+  contatos       Contato[]
+  conversas      Conversa[]
+  leads          Lead[]
+  configuracaoIA ConfiguracaoIA?
+}
+
+model NumeroWhatsapp {
+  id             String       @id @default(cuid())
+  empresaId      String
+  empresa        Empresa      @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  phoneNumberId  String       @unique
+  wabaId         String
+  numeroExibicao String
+  tokenAcesso    String       @db.Text
+  status         StatusNumero @default(conectado)
+  criadoEm       DateTime     @default(now())
+}
+
+model ConfiguracaoIA {
+  id                  String      @id @default(cuid())
+  empresaId           String      @unique
+  empresa             Empresa     @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  nomeAssistente      String      @default("Assistente")
+  tomDeVoz            String      @default("cordial e objetivo")
+  baseConhecimento    String      @db.Text
+  regrasEscalonamento String      @db.Text
+  llmProvider         LlmProvider @default(gemini)
+  atualizadoEm        DateTime    @updatedAt
+}
+
+model Contato {
+  id        String   @id @default(cuid())
+  empresaId String
+  empresa   Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  telefone  String
+  nome      String?
+  criadoEm  DateTime @default(now())
+
+  conversas Conversa[]
+  leads     Lead[]
+
+  @@unique([empresaId, telefone])
+}
+
+model Conversa {
+  id                 String          @id @default(cuid())
+  empresaId          String
+  empresa            Empresa         @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  contatoId          String
+  contato            Contato         @relation(fields: [contatoId], references: [id], onDelete: Cascade)
+  status             StatusConversa  @default(aberta)
+  atendidoPor        AtendidoPor     @default(ia)
+  iniciadaEm         DateTime        @default(now())
+  ultimaMensagem     String?         @db.Text
+  ultimaMensagemData DateTime?
+
+  mensagens Mensagem[]
+}
+
+model Mensagem {
+  id         String          @id @default(cuid())
+  conversaId String
+  conversa   Conversa        @relation(fields: [conversaId], references: [id], onDelete: Cascade)
+  direcao    DirecaoMensagem
+  conteudo   String          @db.Text
+  enviadoPor EnviadoPor
+  criadaEm   DateTime        @default(now())
+}
+
+model Lead {
+  id            String     @id @default(cuid())
+  empresaId     String
+  empresa       Empresa    @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  contatoId     String
+  contato       Contato    @relation(fields: [contatoId], references: [id], onDelete: Cascade)
+  etapaFunil    EtapaFunil @default(novo)
+  valorEstimado Float?
+  observacoes   String?    @db.Text
+  criadoEm      DateTime   @default(now())
+  atualizadoEm  DateTime   @updatedAt
+}
+
+model UsuarioPainel {
+  id         String         @id @default(cuid())
+  empresaId  String?
+  empresa    Empresa?       @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  nome       String
+  email      String         @unique
+  senhaHash  String
+  perfil     PerfilUsuario  @default(CLIENTE_OPERADOR)
+  criadoEm   DateTime       @default(now())
+}
