@@ -2,14 +2,12 @@ import React, { useState, useEffect } from 'react';
 import {
   Bot,
   CheckCircle,
-  Filter,
   Kanban,
   MessageSquare,
   RefreshCw,
   Send,
   User,
   UserCheck,
-  UserPlus,
 } from 'lucide-react';
 import { Conversa, Mensagem } from '../types';
 
@@ -25,16 +23,12 @@ export const ConversasLive: React.FC<ConversasLiveProps> = ({ empresaId, onLeadC
   const [selectedContato, setSelectedContato] = useState<any>(null);
   const [filter, setFilter] = useState<'todas' | 'ia' | 'humano' | 'encerrada'>('todas');
   const [inputMensagem, setInputMensagem] = useState('');
-  const [loading, setLoading] = useState(false);
   const [creatingLead, setCreatingLead] = useState(false);
   const [leadSuccessMsg, setLeadSuccessMsg] = useState('');
 
-  // Fetch conversations for tenant
   const fetchConversas = async () => {
     try {
-      const res = await fetch('/api/conversas', {
-        headers: { 'x-empresa-id': empresaId },
-      });
+      const res = await fetch('/api/conversas', { headers: { 'x-empresa-id': empresaId } });
       const data = await res.json();
       if (Array.isArray(data)) {
         setConversas(data);
@@ -47,12 +41,9 @@ export const ConversasLive: React.FC<ConversasLiveProps> = ({ empresaId, onLeadC
     }
   };
 
-  // Fetch messages for selected conversation
   const fetchMensagens = async (conversaId: string) => {
     try {
-      const res = await fetch(`/api/conversas/${conversaId}/mensagens`, {
-        headers: { 'x-empresa-id': empresaId },
-      });
+      const res = await fetch(`/api/conversas/${conversaId}/mensagens`, { headers: { 'x-empresa-id': empresaId } });
       const data = await res.json();
       if (data.mensagens) {
         setMensagens(data.mensagens);
@@ -65,30 +56,23 @@ export const ConversasLive: React.FC<ConversasLiveProps> = ({ empresaId, onLeadC
 
   useEffect(() => {
     fetchConversas();
-    const interval = setInterval(fetchConversas, 3000); // Live polling for real-time messages
+    const interval = setInterval(fetchConversas, 3000);
     return () => clearInterval(interval);
   }, [empresaId]);
 
   useEffect(() => {
-    if (selectedConversaId) {
-      fetchMensagens(selectedConversaId);
-    }
+    if (selectedConversaId) fetchMensagens(selectedConversaId);
   }, [selectedConversaId]);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputMensagem.trim() || !selectedConversaId) return;
-
     const textToSend = inputMensagem;
     setInputMensagem('');
-
     try {
       const res = await fetch(`/api/conversas/${selectedConversaId}/mensagens`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-empresa-id': empresaId,
-        },
+        headers: { 'Content-Type': 'application/json', 'x-empresa-id': empresaId },
         body: JSON.stringify({ conteudo: textToSend }),
       });
       if (res.ok) {
@@ -105,10 +89,7 @@ export const ConversasLive: React.FC<ConversasLiveProps> = ({ empresaId, onLeadC
     try {
       const res = await fetch(`/api/conversas/${selectedConversaId}/status`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-empresa-id': empresaId,
-        },
+        headers: { 'Content-Type': 'application/json', 'x-empresa-id': empresaId },
         body: JSON.stringify({ atendidoPor: novoAtendente }),
       });
       if (res.ok) {
@@ -125,10 +106,7 @@ export const ConversasLive: React.FC<ConversasLiveProps> = ({ empresaId, onLeadC
     try {
       const res = await fetch(`/api/conversas/${selectedConversaId}/status`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-empresa-id': empresaId,
-        },
+        headers: { 'Content-Type': 'application/json', 'x-empresa-id': empresaId },
         body: JSON.stringify({ status: 'encerrada' }),
       });
       if (res.ok) {
@@ -146,10 +124,7 @@ export const ConversasLive: React.FC<ConversasLiveProps> = ({ empresaId, onLeadC
     try {
       const res = await fetch('/api/leads', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-empresa-id': empresaId,
-        },
+        headers: { 'Content-Type': 'application/json', 'x-empresa-id': empresaId },
         body: JSON.stringify({
           contatoId: selectedContato.id,
           etapaFunil: 'novo',
@@ -191,48 +166,25 @@ export const ConversasLive: React.FC<ConversasLiveProps> = ({ empresaId, onLeadC
           </p>
         </div>
 
-        {/* Filter Pills */}
         <div className="flex items-center space-x-1.5 bg-[#0E182A] border border-[#D4AF37]/30 p-1.5 rounded-2xl text-xs shadow-md">
-          <button
-            onClick={() => setFilter('todas')}
-            className={`px-3.5 py-1.5 rounded-xl font-medium transition text-[10px] uppercase tracking-wider ${
-              filter === 'todas' ? 'bg-[#D4AF37] text-[#050B14] font-bold shadow-sm' : 'text-[#94A3B8] hover:text-[#F8FAFC]'
-            }`}
-          >
+          <button onClick={() => setFilter('todas')} className={`px-3.5 py-1.5 rounded-xl font-medium transition text-[10px] uppercase tracking-wider ${filter === 'todas' ? 'bg-[#D4AF37] text-[#050B14] font-bold shadow-sm' : 'text-[#94A3B8] hover:text-[#F8FAFC]'}`}>
             Todas ({conversas.length})
           </button>
-          <button
-            onClick={() => setFilter('ia')}
-            className={`px-3.5 py-1.5 rounded-xl font-medium transition flex items-center gap-1 text-[10px] uppercase tracking-wider ${
-              filter === 'ia' ? 'bg-[#D4AF37]/20 text-[#D4AF37] border border-[#D4AF37]/40 font-bold shadow-sm' : 'text-[#94A3B8] hover:text-[#F8FAFC]'
-            }`}
-          >
+          <button onClick={() => setFilter('ia')} className={`px-3.5 py-1.5 rounded-xl font-medium transition flex items-center gap-1 text-[10px] uppercase tracking-wider ${filter === 'ia' ? 'bg-[#D4AF37]/20 text-[#D4AF37] border border-[#D4AF37]/40 font-bold shadow-sm' : 'text-[#94A3B8] hover:text-[#F8FAFC]'}`}>
             <Bot className="w-3.5 h-3.5 text-[#D4AF37]" />
             Por IA ({conversas.filter((c) => c.atendidoPor === 'ia' && c.status === 'aberta').length})
           </button>
-          <button
-            onClick={() => setFilter('humano')}
-            className={`px-3.5 py-1.5 rounded-xl font-medium transition flex items-center gap-1 text-[10px] uppercase tracking-wider ${
-              filter === 'humano' ? 'bg-[#15243F] text-[#F8FAFC] border border-[#D4AF37]/30 font-bold shadow-sm' : 'text-[#94A3B8] hover:text-[#F8FAFC]'
-            }`}
-          >
+          <button onClick={() => setFilter('humano')} className={`px-3.5 py-1.5 rounded-xl font-medium transition flex items-center gap-1 text-[10px] uppercase tracking-wider ${filter === 'humano' ? 'bg-[#15243F] text-[#F8FAFC] border border-[#D4AF37]/30 font-bold shadow-sm' : 'text-[#94A3B8] hover:text-[#F8FAFC]'}`}>
             <User className="w-3.5 h-3.5 text-slate-300" />
             Por Humano ({conversas.filter((c) => c.atendidoPor === 'humano' && c.status === 'aberta').length})
           </button>
-          <button
-            onClick={() => setFilter('encerrada')}
-            className={`px-3.5 py-1.5 rounded-xl font-medium transition text-[10px] uppercase tracking-wider ${
-              filter === 'encerrada' ? 'bg-[#15243F] text-[#F8FAFC]' : 'text-[#94A3B8] hover:text-[#F8FAFC]'
-            }`}
-          >
+          <button onClick={() => setFilter('encerrada')} className={`px-3.5 py-1.5 rounded-xl font-medium transition text-[10px] uppercase tracking-wider ${filter === 'encerrada' ? 'bg-[#15243F] text-[#F8FAFC]' : 'text-[#94A3B8] hover:text-[#F8FAFC]'}`}>
             Encerradas
           </button>
         </div>
       </div>
 
-      {/* Main Chat Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-[680px]">
-        {/* Left List Column */}
         <div className="lg:col-span-4 bg-[#0E182A]/90 rounded-2xl border border-[#D4AF37]/30 flex flex-col overflow-hidden shadow-2xl backdrop-blur-md">
           <div className="p-3.5 bg-[#080F1D] border-b border-[#D4AF37]/20 flex items-center justify-between text-xs text-[#94A3B8]">
             <span className="font-bold uppercase tracking-wider text-[10px] text-[#D4AF37]">Contatos ({filteredConversas.length})</span>
@@ -264,9 +216,7 @@ export const ConversasLive: React.FC<ConversasLiveProps> = ({ empresaId, onLeadC
                       <div className="flex items-center justify-between mb-0.5">
                         <span className="font-bold text-[#F8FAFC] text-xs truncate">{nomeContato}</span>
                         <span className="text-[10px] text-[#94A3B8] font-mono">
-                          {conversa.ultimaMensagemData
-                            ? new Date(conversa.ultimaMensagemData).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                            : ''}
+                          {conversa.ultimaMensagemData ? new Date(conversa.ultimaMensagemData).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                         </span>
                       </div>
                       <p className="text-xs text-[#94A3B8] truncate mb-1.5">{conversa.ultimaMensagem || 'Sua conversa iniciou...'}</p>
@@ -292,11 +242,9 @@ export const ConversasLive: React.FC<ConversasLiveProps> = ({ empresaId, onLeadC
           </div>
         </div>
 
-        {/* Right Active Chat Window */}
         <div className="lg:col-span-8 bg-[#0E182A]/90 rounded-2xl border border-[#D4AF37]/30 flex flex-col overflow-hidden shadow-2xl backdrop-blur-md">
           {selectedConversaObj ? (
             <>
-              {/* Chat Header */}
               <div className="p-4 bg-[#080F1D] border-b border-[#D4AF37]/20 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center space-x-3">
                   <div className="w-10 h-10 rounded-xl bg-[#D4AF37] text-[#050B14] flex items-center justify-center font-serif font-bold text-sm shadow-md">
@@ -308,39 +256,25 @@ export const ConversasLive: React.FC<ConversasLiveProps> = ({ empresaId, onLeadC
                   </div>
                 </div>
 
-                {/* Operator Actions Toolbar */}
                 <div className="flex items-center space-x-2">
                   {selectedConversaObj.atendidoPor === 'ia' ? (
-                    <button
-                      onClick={() => handleToggleAtendimento('humano')}
-                      className="bg-[#D4AF37] hover:bg-[#F3E5AB] text-[#050B14] text-xs uppercase tracking-wider font-bold px-3.5 py-2 rounded-xl flex items-center space-x-1.5 transition shadow-md hover:shadow-[#D4AF37]/20"
-                    >
+                    <button onClick={() => handleToggleAtendimento('humano')} className="bg-[#D4AF37] hover:bg-[#F3E5AB] text-[#050B14] text-xs uppercase tracking-wider font-bold px-3.5 py-2 rounded-xl flex items-center space-x-1.5 transition shadow-md hover:shadow-[#D4AF37]/20">
                       <UserCheck className="w-3.5 h-3.5" />
                       <span>Assumir Atendimento</span>
                     </button>
                   ) : (
-                    <button
-                      onClick={() => handleToggleAtendimento('ia')}
-                      className="bg-[#15243F] hover:bg-[#1a2e52] text-[#D4AF37] border border-[#D4AF37]/40 text-xs uppercase tracking-wider font-semibold px-3.5 py-2 rounded-xl flex items-center space-x-1.5 transition shadow-sm"
-                    >
+                    <button onClick={() => handleToggleAtendimento('ia')} className="bg-[#15243F] hover:bg-[#1a2e52] text-[#D4AF37] border border-[#D4AF37]/40 text-xs uppercase tracking-wider font-semibold px-3.5 py-2 rounded-xl flex items-center space-x-1.5 transition shadow-sm">
                       <Bot className="w-3.5 h-3.5 text-[#D4AF37]" />
                       <span>Devolver p/ IA</span>
                     </button>
                   )}
 
-                  <button
-                    onClick={handleCriarLeadRapido}
-                    disabled={creatingLead}
-                    className="bg-[#15243F] hover:bg-[#1a2e52] text-[#F8FAFC] border border-[#D4AF37]/30 text-xs font-semibold px-3 py-2 rounded-xl flex items-center space-x-1 transition uppercase tracking-wider text-[10px] shadow-sm"
-                  >
+                  <button onClick={handleCriarLeadRapido} disabled={creatingLead} className="bg-[#15243F] hover:bg-[#1a2e52] text-[#F8FAFC] border border-[#D4AF37]/30 text-xs font-semibold px-3 py-2 rounded-xl flex items-center space-x-1 transition uppercase tracking-wider text-[10px] shadow-sm">
                     <Kanban className="w-3.5 h-3.5 text-[#D4AF37]" />
                     <span>Criar Lead</span>
                   </button>
 
-                  <button
-                    onClick={handleEncerrarConversa}
-                    className="bg-[#0E182A] hover:bg-[#15243F] text-[#94A3B8] border border-slate-700 text-[10px] font-semibold uppercase tracking-wider px-3 py-2 rounded-xl transition"
-                  >
+                  <button onClick={handleEncerrarConversa} className="bg-[#0E182A] hover:bg-[#15243F] text-[#94A3B8] border border-slate-700 text-[10px] font-semibold uppercase tracking-wider px-3 py-2 rounded-xl transition">
                     Encerrar
                   </button>
                 </div>
@@ -353,11 +287,9 @@ export const ConversasLive: React.FC<ConversasLiveProps> = ({ empresaId, onLeadC
                 </div>
               )}
 
-              {/* Message Timeline */}
               <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-[#050B14]/80 scrollbar-thin">
                 {mensagens.map((msg) => {
                   const isIncoming = msg.direcao === 'in';
-
                   return (
                     <div key={msg.id} className={`flex flex-col ${isIncoming ? 'items-start' : 'items-end'}`}>
                       <div
@@ -374,11 +306,7 @@ export const ConversasLive: React.FC<ConversasLiveProps> = ({ empresaId, onLeadC
                             {msg.enviadoPor === 'contato' && <User className="w-3 h-3 text-[#D4AF37]" />}
                             {msg.enviadoPor === 'ia' && <Bot className="w-3 h-3 text-[#D4AF37]" />}
                             {msg.enviadoPor === 'humano' && <UserCheck className="w-3 h-3 text-[#050B14]" />}
-                            {msg.enviadoPor === 'contato'
-                              ? 'Cliente'
-                              : msg.enviadoPor === 'ia'
-                              ? 'IA Secretária'
-                              : 'Atendente Humano'}
+                            {msg.enviadoPor === 'contato' ? 'Cliente' : msg.enviadoPor === 'ia' ? 'IA Secretária' : 'Atendente Humano'}
                           </span>
                           <span className="font-mono">{new Date(msg.criadaEm).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                         </div>
@@ -389,24 +317,15 @@ export const ConversasLive: React.FC<ConversasLiveProps> = ({ empresaId, onLeadC
                 })}
               </div>
 
-              {/* Input Footer */}
               <form onSubmit={handleSendMessage} className="p-3 bg-[#080F1D] border-t border-[#D4AF37]/20 flex items-center space-x-2">
                 <input
                   type="text"
                   value={inputMensagem}
                   onChange={(e) => setInputMensagem(e.target.value)}
-                  placeholder={
-                    selectedConversaObj.atendidoPor === 'ia'
-                      ? 'Ao enviar mensagem, o atendimento passa automaticamente para Humano...'
-                      : 'Digite a mensagem para enviar ao WhatsApp do cliente...'
-                  }
+                  placeholder={selectedConversaObj.atendidoPor === 'ia' ? 'Ao enviar mensagem, o atendimento passa automaticamente para Humano...' : 'Digite a mensagem para enviar ao WhatsApp do cliente...'}
                   className="flex-1 bg-[#0E182A] border border-[#D4AF37]/30 rounded-xl px-4 py-2.5 text-xs text-[#F8FAFC] placeholder-[#94A3B8] focus:outline-none focus:border-[#D4AF37] focus:ring-1 focus:ring-[#D4AF37]"
                 />
-                <button
-                  type="submit"
-                  disabled={!inputMensagem.trim()}
-                  className="bg-[#D4AF37] hover:bg-[#F3E5AB] disabled:opacity-40 text-[#050B14] font-bold uppercase tracking-wider text-[10px] px-5 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-md hover:shadow-[#D4AF37]/20"
-                >
+                <button type="submit" disabled={!inputMensagem.trim()} className="bg-[#D4AF37] hover:bg-[#F3E5AB] disabled:opacity-40 text-[#050B14] font-bold uppercase tracking-wider text-[10px] px-5 py-2.5 rounded-xl transition flex items-center space-x-1.5 shadow-md hover:shadow-[#D4AF37]/20">
                   <span>Enviar</span>
                   <Send className="w-3.5 h-3.5" />
                 </button>

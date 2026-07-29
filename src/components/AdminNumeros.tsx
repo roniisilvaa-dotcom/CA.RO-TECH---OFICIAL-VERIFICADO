@@ -29,9 +29,7 @@ export const AdminNumeros: React.FC<AdminNumerosProps> = ({ empresas }) => {
   const fetchNumeros = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/admin/numeros', {
-        headers: { 'x-user-id': 'usr_superadmin' },
-      });
+      const res = await fetch('/api/admin/numeros');
       const data = await res.json();
       if (Array.isArray(data)) {
         setNumeros(data);
@@ -59,7 +57,6 @@ export const AdminNumeros: React.FC<AdminNumerosProps> = ({ empresas }) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': 'usr_superadmin',
         },
         body: JSON.stringify({
           empresaId,

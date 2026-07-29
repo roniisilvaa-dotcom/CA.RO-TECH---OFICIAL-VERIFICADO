@@ -41,7 +41,6 @@ export const AdminEmpresas: React.FC<AdminEmpresasProps> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': 'usr_superadmin',
         },
         body: JSON.stringify({
           nome,
@@ -73,7 +72,6 @@ export const AdminEmpresas: React.FC<AdminEmpresasProps> = ({
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': 'usr_superadmin',
         },
         body: JSON.stringify({ ativo: !atualAtivo }),
       });
@@ -90,7 +88,6 @@ export const AdminEmpresas: React.FC<AdminEmpresasProps> = ({
     try {
       const res = await fetch(`/api/admin/empresas/${empresaId}`, {
         method: 'DELETE',
-        headers: { 'x-user-id': 'usr_superadmin' },
       });
       if (res.ok) {
         onRefresh();

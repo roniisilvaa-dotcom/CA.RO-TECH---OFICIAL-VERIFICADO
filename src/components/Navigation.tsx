@@ -29,7 +29,6 @@ export const Navigation: React.FC<NavigationProps> = ({
     <nav className="bg-[#080F1D] border-b border-[#D4AF37]/25 text-[#F8FAFC]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex space-x-1 sm:space-x-2 overflow-x-auto py-2.5 scrollbar-none">
-          {/* CLIENT AREA TABS */}
           <button
             onClick={() => setActiveTab('conversas')}
             className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-[0.14em] transition-all duration-200 whitespace-nowrap border ${
@@ -54,7 +53,6 @@ export const Navigation: React.FC<NavigationProps> = ({
             <span>Funil de Leads</span>
           </button>
 
-          {/* Config IA disabled for operators */}
           {!isOperador && (
             <button
               onClick={() => setActiveTab('config-ia')}
@@ -105,7 +103,6 @@ export const Navigation: React.FC<NavigationProps> = ({
             <span>Equipe</span>
           </button>
 
-          {/* SUPER ADMIN SPECIFIC TABS */}
           {isSuperAdmin && (
             <div className="flex items-center pl-2 ml-2 border-l border-[#D4AF37]/30 space-x-2">
               <button
