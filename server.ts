@@ -94,7 +94,14 @@ async function startServer() {
   });
 
   async function enviarMensagemMeta(numero: { phoneNumberId: string; tokenAcesso: string }, to: string, texto: string) {
-    if (!numero.tokenAcesso || numero.tokenAcesso === 'SUBSTITUIR_PELO_TOKEN_PERMANENTE') {
+    // Fallback: se o token salvo no banco ainda for o placeholder, usa o token
+    // permanente configurado via variável de ambiente (META_TOKEN_CAROTECH) no Railway.
+    const tokenReal =
+      !numero.tokenAcesso || numero.tokenAcesso === 'SUBSTITUIR_PELO_TOKEN_PERMANENTE'
+        ? process.env.META_TOKEN_CAROTECH
+        : numero.tokenAcesso;
+
+    if (!tokenReal) {
       console.log('[Meta API] Token ainda não configurado - envio real pulado (modo simulação).');
       return;
     }
@@ -103,7 +110,7 @@ async function startServer() {
       await fetch(url, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${numero.tokenAcesso}`,
+          Authorization: `Bearer ${tokenReal}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
