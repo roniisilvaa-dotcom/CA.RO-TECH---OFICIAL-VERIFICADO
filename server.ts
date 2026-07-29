@@ -1,6 +1,5 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
@@ -18,9 +17,6 @@ import {
 } from './server/auth.js';
 
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 function sanitizeUsuario(u: any) {
   const { senhaHash, ...rest } = u;
